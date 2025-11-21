@@ -1,0 +1,204 @@
+{
+  "groups": [
+    {
+      "groupId": "api-base-images",
+      "name": "Base Images API Tests",
+      "description": "基础镜像相关API测试"
+    },
+    {
+      "groupId": "api-custom-images",
+      "name": "Custom Images API Tests",
+      "description": "自定义镜像相关API测试"
+    },
+    {
+      "groupId": "integration",
+      "name": "Integration Tests",
+      "description": "集成测试"
+    }
+  ],
+  "tests": [
+    {
+      "testId": "base-images-list",
+      "groupId": "api-base-images",
+      "name": "List Base Images",
+      "type": "http",
+      "priority": "P0",
+      "objective": "验证基础镜像列表接口返回正确的分页数据",
+      "http": {
+        "method": "GET",
+        "path": "/api/v1/base-images?page=1&pageSize=5",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      "assertions": [
+        {
+          "type": "status_code",
+          "expected": 200
+        },
+        {
+          "type": "json_path",
+          "path": "$.code",
+          "expected": 0
+        },
+        {
+          "type": "json_path",
+          "path": "$.data",
+          "operator": "exists"
+        }
+      ],
+      "tags": ["api", "base-images", "list", "P0"]
+    },
+    {
+      "testId": "base-images-get-detail",
+      "groupId": "api-base-images",
+      "name": "Get Base Image Detail",
+      "type": "http",
+      "priority": "P0",
+      "objective": "验证获取基础镜像详情接口",
+      "http": {
+        "method": "GET",
+        "path": "/api/v1/base-images/ubuntu-22.04",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      "assertions": [
+        {
+          "type": "status_code",
+          "expected": 200
+        },
+        {
+          "type": "json_path",
+          "path": "$.data.name",
+          "expected": "ubuntu-22.04"
+        }
+      ],
+      "tags": ["api", "base-images", "detail", "P0"]
+    },
+    {
+      "testId": "custom-images-create",
+      "groupId": "api-custom-images",
+      "name": "Create Custom Image",
+      "type": "http",
+      "priority": "P1",
+      "objective": "验证创建自定义镜像接口",
+      "http": {
+        "method": "POST",
+        "path": "/api/v1/custom-images",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "name": "test-custom-image",
+          "baseImage": "ubuntu-22.04",
+          "description": "Test custom image",
+          "tags": ["test"]
+        }
+      },
+      "assertions": [
+        {
+          "type": "status_code",
+          "operator": "in",
+          "expected": [200, 201]
+        },
+        {
+          "type": "json_path",
+          "path": "$.code",
+          "expected": 0
+        }
+      ],
+      "tags": ["api", "custom-images", "create", "P1"]
+    },
+    {
+      "testId": "custom-images-list",
+      "groupId": "api-custom-images",
+      "name": "List Custom Images",
+      "type": "http",
+      "priority": "P1",
+      "objective": "验证自定义镜像列表接口",
+      "http": {
+        "method": "GET",
+        "path": "/api/v1/custom-images?page=1&pageSize=10",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      "assertions": [
+        {
+          "type": "status_code",
+          "expected": 200
+        },
+        {
+          "type": "json_path",
+          "path": "$.data",
+          "operator": "exists"
+        }
+      ],
+      "tags": ["api", "custom-images", "list", "P1"]
+    },
+    {
+      "testId": "health-check",
+      "groupId": "integration",
+      "name": "Service Health Check",
+      "type": "http",
+      "priority": "P0",
+      "objective": "验证服务健康检查接口",
+      "http": {
+        "method": "GET",
+        "path": "/health",
+        "headers": {}
+      },
+      "assertions": [
+        {
+          "type": "status_code",
+          "expected": 200
+        }
+      ],
+      "tags": ["health", "integration", "P0"]
+    },
+    {
+      "testId": "database-connection",
+      "groupId": "integration",
+      "name": "Database Connection Test",
+      "type": "command",
+      "priority": "P0",
+      "objective": "验证数据库连接是否正常",
+      "command": {
+        "cmd": "sqlite3",
+        "args": ["./data/test_management.db", "SELECT COUNT(*) FROM test_cases;"],
+        "timeout": 5
+      },
+      "assertions": [
+        {
+          "type": "exit_code",
+          "expected": 0
+        }
+      ],
+      "tags": ["database", "integration", "P0"]
+    },
+    {
+      "testId": "api-response-time",
+      "groupId": "integration",
+      "name": "API Response Time Test",
+      "type": "http",
+      "priority": "P2",
+      "objective": "验证API响应时间在可接受范围内",
+      "timeout": 1,
+      "http": {
+        "method": "GET",
+        "path": "/api/v1/base-images",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      "assertions": [
+        {
+          "type": "status_code",
+          "expected": 200
+        }
+      ],
+      "tags": ["performance", "api", "P2"]
+    }
+  ]
+}

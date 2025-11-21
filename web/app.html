@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试管理平台</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/antd@5.12.8/dist/reset.css">
+    <style>
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        #root { height: 100vh; }
+        .app-layout { height: 100vh; }
+        .logo {
+            height: 32px; margin: 16px; background: rgba(255, 255, 255, 0.2);
+            border-radius: 6px; display: flex; align-items: center; justify-content: center;
+            color: white; font-weight: bold;
+        }
+        .group-tree-item {
+            display: flex; align-items: center; justify-content: space-between;
+            width: 100%;
+        }
+        .group-tree-actions {
+            opacity: 0;
+            transition: opacity 0.15s;
+            display: flex;
+            gap: 2px; /* Compact spacing between buttons */
+        }
+        .group-tree-item:hover .group-tree-actions {
+            opacity: 1;
+        }
+        .group-tree-actions .ant-btn {
+            min-width: 24px;
+            height: 24px;
+            padding: 0 4px;
+            font-size: 14px;
+            line-height: 22px;
+        }
+        .json-viewer {
+            background: #f5f5f5; padding: 12px; border-radius: 4px;
+            font-family: 'Courier New', monospace; font-size: 12px;
+            max-height: 400px; overflow: auto; white-space: pre-wrap;
+        }
+        .group-has-target {
+            color: #52c41a;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/dayjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/antd@5.12.8/dist/antd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.6/babel.min.js"></script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+        const {
+            Layout, Menu, Button, Table, Space, Modal, Form, Input, Select,
+            Tag, message, Popconfirm, Drawer, Descriptions, Tree, Card,
+            Statistic, Row, Col, Dropdown, Tooltip
+        } = antd;
+
+        const { Header, Content, Sider } = Layout;
+        const { Option } = Select;
+        const { TextArea } = Input;
+        const API_BASE = '/api/v2';
+
+        function App() {
+            const [loading, setLoading] = useState(false);
+            const [groups, setGroups] = useState([]);
+            const [tests, setTests] = useState([]);
+            const [selectedGroup, setSelectedGroup] = useState(null);
+            const [stats, setStats] = useState({});
+
+            // Test modals
+            const [createTestModalVisible, setCreateTestModalVisible] = useState(false);
+            const [editTestModalVisible, setEditTestModalVisible] = useState(false);
+            const [testHistoryDrawerVisible, setTestHistoryDrawerVisible] = useState(false);
+
+            // Group modals
+            const [createGroupModalVisible, setCreateGroupModalVisible] = useState(false);
+            const [editGroupModalVisible, setEditGroupModalVisible] = useState(false);
+            const [currentGroup, setCurrentGroup] = useState(null);
+            const [parentGroupForCreate, setParentGroupForCreate] = useState(null); // 用于追踪正在为哪个父分组创建子分组
+
+            const [currentTest, setCurrentTest] = useState(null);
+            const [testResults, setTestResults] = useState([]);
+            const [executing, setExecuting] = useState({});
+
+            const [testForm] = Form.useForm();
+            const [editTestForm] = Form.useForm();
+            const [groupForm] = Form.useForm();
+            const [editGroupForm] = Form.useForm();
+
+            const loadGroups = useCallback(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/groups/tree`);
+                    const data = await response.json();
+                    setGroups(data || []);
+                } catch (error) {
+                    message.error('加载分组失败');
+                }
+            }, []);
+
+            const loadTests = useCallback(async (groupId = null) => {
+                setLoading(true);
+                try {
+                    const response = await fetch(`${API_BASE}/tests?limit=100`);
+                    const data = await response.json();
+                    let filteredTests = data.data || [];
+                    if (groupId) {
+                        filteredTests = filteredTests.filter(t => t.groupId === groupId);
+                    }
+                    setTests(filteredTests);
+                } catch (error) {
+                    message.error('加载测试失败');
+                }
+                setLoading(false);
+            }, []);
+
+            const loadStats = useCallback(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/tests/stats`);
+                    const data = await response.json();
+                    if (data.success) {
+                        setStats(data.data);
+                    }
+                } catch (error) {
+                    console.error('加载统计失败');
+                }
+            }, []);
+
+            useEffect(() => {
+                loadGroups();
+                loadTests();
+                loadStats();
+            }, [loadGroups, loadTests, loadStats]);
+
+            // ===== Group Management =====
+
+            const handleCreateGroup = async (values) => {
+                try {
+                    const payload = {
+                        groupId: values.groupId,
+                        name: values.name,
+                        parentId: values.parentId || '',
+                        description: values.description || '',
+                        targetHost: values.targetHost || ''
+                    };
+
+                    const response = await fetch(`${API_BASE}/groups`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.ok) {
+                        message.success('创建分组成功');
+                        setCreateGroupModalVisible(false);
+                        groupForm.resetFields();
+                        setParentGroupForCreate(null);
+                        loadGroups();
+                    } else {
+                        const error = await response.json();
+                        message.error('创建失败: ' + error.error);
+                    }
+                } catch (error) {
+                    message.error('创建失败: ' + error.message);
+                }
+            };
+
+            const handleCreateSubGroup = (parentGroup) => {
+                setParentGroupForCreate(parentGroup);
+                groupForm.setFieldsValue({
+                    parentId: parentGroup.groupId
+                });
+                setCreateGroupModalVisible(true);
+            };
+
+            const handleEditGroup = (group) => {
+                setCurrentGroup(group);
+                editGroupForm.setFieldsValue({
+                    name: group.name,
+                    description: group.description || '',
+                    targetHost: group.targetHost || ''
+                });
+                setEditGroupModalVisible(true);
+            };
+
+            const handleUpdateGroup = async (values) => {
+                try {
+                    const payload = {
+                        name: values.name,
+                        description: values.description || '',
+                        targetHost: values.targetHost || ''
+                    };
+
+                    const response = await fetch(`${API_BASE}/groups/${currentGroup.groupId}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.ok) {
+                        message.success('更新分组成功');
+                        setEditGroupModalVisible(false);
+                        editGroupForm.resetFields();
+                        setCurrentGroup(null);
+                        loadGroups();
+                    } else {
+                        message.error('更新失败');
+                    }
+                } catch (error) {
+                    message.error('更新失败: ' + error.message);
+                }
+            };
+
+            const handleDeleteGroup = async (groupId) => {
+                try {
+                    const response = await fetch(`${API_BASE}/groups/${groupId}`, {
+                        method: 'DELETE'
+                    });
+                    if (response.ok) {
+                        message.success('删除分组成功');
+                        loadGroups();
+                        if (selectedGroup === groupId) {
+                            setSelectedGroup(null);
+                            loadTests();
+                        }
+                    } else {
+                        message.error('删除失败');
+                    }
+                } catch (error) {
+                    message.error('删除失败');
+                }
+            };
+
+            // ===== Test Management =====
+
+            const handleCreateTest = async (values) => {
+                try {
+                    const payload = {
+                        testId: values.testId,
+                        groupId: values.groupId,
+                        name: values.name,
+                        type: values.type,
+                        priority: values.priority || 'P1',
+                        objective: values.objective,
+                        http: values.type === 'http' ? {
+                            method: values.httpMethod,
+                            path: values.httpPath,
+                            headers: values.httpHeaders ? JSON.parse(values.httpHeaders) : {},
+                            body: values.httpBody ? JSON.parse(values.httpBody) : null
+                        } : undefined,
+                        command: values.type === 'command' ? {
+                            cmd: values.cmdCommand,
+                            args: values.cmdArgs ? values.cmdArgs.split(' ') : [],
+                            timeout: parseInt(values.cmdTimeout) || 60
+                        } : undefined,
+                        assertions: values.assertions ? JSON.parse(values.assertions) : [],
+                        tags: values.tags ? values.tags.split(',').map(t => t.trim()) : [],
+                        setupHooks: values.setupHooks ? JSON.parse(values.setupHooks) : [],
+                        teardownHooks: values.teardownHooks ? JSON.parse(values.teardownHooks) : []
+                    };
+
+                    const response = await fetch(`${API_BASE}/tests`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.ok) {
+                        message.success('创建成功');
+                        setCreateTestModalVisible(false);
+                        testForm.resetFields();
+                        loadTests(selectedGroup);
+                        loadStats();
+                    } else {
+                        const error = await response.json();
+                        message.error('创建失败: ' + error.error);
+                    }
+                } catch (error) {
+                    message.error('创建失败: ' + error.message);
+                }
+            };
+
+            const handleEditTest = (test) => {
+                setCurrentTest(test);
+                editTestForm.setFieldsValue({
+                    name: test.name,
+                    type: test.type,
+                    priority: test.priority,
+                    objective: test.objective,
+                    httpMethod: test.http?.method,
+                    httpPath: test.http?.path,
+                    httpHeaders: test.http?.headers ? JSON.stringify(test.http.headers, null, 2) : '',
+                    httpBody: test.http?.body ? JSON.stringify(test.http.body, null, 2) : '',
+                    cmdCommand: test.command?.cmd,
+                    cmdArgs: test.command?.args ? test.command.args.join(' ') : '',
+                    cmdTimeout: test.command?.timeout || 60,
+                    cmdCwd: test.command?.cwd || '',
+                    assertions: test.assertions ? JSON.stringify(test.assertions, null, 2) : '',
+                    tags: test.tags ? test.tags.join(', ') : '',
+                    setupHooks: test.setupHooks ? JSON.stringify(test.setupHooks, null, 2) : '',
+                    teardownHooks: test.teardownHooks ? JSON.stringify(test.teardownHooks, null, 2) : ''
+                });
+                setEditTestModalVisible(true);
+            };
+
+            const handleUpdateTest = async (values) => {
+                try {
+                    const payload = {
+                        name: values.name,
+                        priority: values.priority,
+                        objective: values.objective,
+                        http: values.type === 'http' ? {
+                            method: values.httpMethod,
+                            path: values.httpPath,
+                            headers: values.httpHeaders ? JSON.parse(values.httpHeaders) : {},
+                            body: values.httpBody ? JSON.parse(values.httpBody) : null
+                        } : undefined,
+                        command: values.type === 'command' ? {
+                            cmd: values.cmdCommand,
+                            args: values.cmdArgs ? values.cmdArgs.split(' ') : [],
+                            timeout: parseInt(values.cmdTimeout) || 60,
+                            cwd: values.cmdCwd || ''
+                        } : undefined,
+                        assertions: values.assertions ? JSON.parse(values.assertions) : [],
+                        tags: values.tags ? values.tags.split(',').map(t => t.trim()) : [],
+                        setupHooks: values.setupHooks ? JSON.parse(values.setupHooks) : [],
+                        teardownHooks: values.teardownHooks ? JSON.parse(values.teardownHooks) : []
+                    };
+
+                    const response = await fetch(`${API_BASE}/tests/${currentTest.testId}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.ok) {
+                        message.success('更新成功');
+                        setEditTestModalVisible(false);
+                        editTestForm.resetFields();
+                        setCurrentTest(null);
+                        loadTests(selectedGroup);
+                    } else {
+                        message.error('更新失败');
+                    }
+                } catch (error) {
+                    message.error('更新失败: ' + error.message);
+                }
+            };
+
+            const handleDeleteTest = async (testId) => {
+                try {
+                    const response = await fetch(`${API_BASE}/tests/${testId}`, { method: 'DELETE' });
+                    if (response.ok) {
+                        message.success('删除成功');
+                        loadTests(selectedGroup);
+                        loadStats();
+                    } else {
+                        message.error('删除失败');
+                    }
+                } catch (error) {
+                    message.error('删除失败');
+                }
+            };
+
+            const handleExecuteTest = async (testId) => {
+                setExecuting(prev => ({ ...prev, [testId]: true }));
+                try {
+                    const response = await fetch(`${API_BASE}/tests/${testId}/execute`, { method: 'POST' });
+                    if (response.ok) {
+                        message.success('测试执行完成');
+                        loadTests(selectedGroup);
+                    } else {
+                        message.error('执行失败');
+                    }
+                } catch (error) {
+                    message.error('执行失败');
+                } finally {
+                    setExecuting(prev => ({ ...prev, [testId]: false }));
+                }
+            };
+
+            const handleViewHistory = async (test) => {
+                setCurrentTest(test);
+                setTestHistoryDrawerVisible(true);
+                try {
+                    const response = await fetch(`${API_BASE}/tests/${test.testId}/history?limit=10`);
+                    const data = await response.json();
+                    setTestResults(data || []);
+                } catch (error) {
+                    message.error('加载历史失败');
+                }
+            };
+
+            // ===== Tree Data =====
+
+            const buildTreeData = (groupsList) => {
+                return groupsList.map(group => ({
+                    title: (
+                        <div className="group-tree-item">
+                            <span className={group.targetHost ? 'group-has-target' : ''}>
+                                {group.targetHost ? '🎯 ' : '📁 '}{group.name}
+                            </span>
+                            <div className="group-tree-actions">
+                                <Tooltip title="添加子分组">
+                                    <Button
+                                        type="text"
+                                        size="small"
+                                        onClick={(e) => { e.stopPropagation(); handleCreateSubGroup(group); }}
+                                    >
+                                        ➕
+                                    </Button>
+                                </Tooltip>
+                                <Tooltip title="编辑分组">
+                                    <Button
+                                        type="text"
+                                        size="small"
+                                        onClick={(e) => { e.stopPropagation(); handleEditGroup(group); }}
+                                    >
+                                        ✏️
+                                    </Button>
+                                </Tooltip>
+                                <Popconfirm
+                                    title="确定删除分组？"
+                                    onConfirm={(e) => { e.stopPropagation(); handleDeleteGroup(group.groupId); }}
+                                    okText="确定"
+                                    cancelText="取消"
+                                >
+                                    <Button
+                                        type="text"
+                                        size="small"
+                                        danger
+                                        onClick={(e) => e.stopPropagation()}
+                                    >
+                                        🗑️
+                                    </Button>
+                                </Popconfirm>
+                            </div>
+                        </div>
+                    ),
+                    key: group.groupId,
+                    children: group.children ? buildTreeData(group.children) : undefined
+                }));
+            };
+
+            const testColumns = [
+                { title: 'ID', dataIndex: 'testId', key: 'testId', width: 200, ellipsis: true },
+                { title: '名称', dataIndex: 'name', key: 'name', ellipsis: true },
+                {
+                    title: '类型',
+                    dataIndex: 'type',
+                    key: 'type',
+                    width: 100,
+                    render: (type) => <Tag color={type === 'http' ? 'blue' : 'green'}>{type.toUpperCase()}</Tag>
+                },
+                {
+                    title: '优先级',
+                    dataIndex: 'priority',
+                    key: 'priority',
+                    width: 80,
+                    render: (p) => <Tag color={p === 'P0' ? 'red' : p === 'P1' ? 'orange' : 'default'}>{p}</Tag>
+                },
+                {
+                    title: '操作',
+                    key: 'action',
+                    width: 240,
+                    render: (_, record) => (
+                        <Space size="small">
+                            <Button
+                                type="primary"
+                                size="small"
+                                loading={executing[record.testId]}
+                                onClick={() => handleExecuteTest(record.testId)}
+                            >
+                                ▶ 执行
+                            </Button>
+                            <Button size="small" onClick={() => handleViewHistory(record)}>
+                                📊 历史
+                            </Button>
+                            <Button size="small" onClick={() => handleEditTest(record)}>
+                                ✏️ 编辑
+                            </Button>
+                            <Popconfirm
+                                title="确定删除？"
+                                onConfirm={() => handleDeleteTest(record.testId)}
+                                okText="确定"
+                                cancelText="取消"
+                            >
+                                <Button danger size="small">🗑️</Button>
+                            </Popconfirm>
+                        </Space>
+                    )
+                }
+            ];
+
+            const treeData = buildTreeData(groups);
+
+            return (
+                <Layout className="app-layout">
+                    <Header style={{ display: 'flex', alignItems: 'center', background: '#001529' }}>
+                        <div className="logo">🧪 测试管理平台</div>
+                        <div style={{ flex: 1 }} />
+                        <Space>
+                            <Button onClick={() => setCreateGroupModalVisible(true)}>
+                                ➕ 新建分组
+                            </Button>
+                            <Button type="primary" onClick={() => {
+                                loadGroups();
+                                loadTests(selectedGroup);
+                                loadStats();
+                            }}>
+                                🔄 刷新
+                            </Button>
+                        </Space>
+                    </Header>
+                    <Layout>
+                        <Sider width={300} style={{ background: '#fff', padding: '16px' }}>
+                            <h3>📋 测试分组</h3>
+                            <Tree
+                                defaultExpandAll
+                                treeData={treeData}
+                                onSelect={(keys) => {
+                                    setSelectedGroup(keys[0] || null);
+                                    loadTests(keys[0] || null);
+                                }}
+                            />
+                        </Sider>
+                        <Layout style={{ padding: '24px' }}>
+                            <Content>
+                                <Row gutter={16} style={{ marginBottom: 24 }}>
+                                    <Col span={6}>
+                                        <Card><Statistic title="总测试数" value={stats.total || 0} /></Card>
+                                    </Col>
+                                    <Col span={6}>
+                                        <Card><Statistic title="活跃测试" value={stats.active || 0} valueStyle={{ color: '#3f8600' }} /></Card>
+                                    </Col>
+                                    <Col span={6}>
+                                        <Card><Statistic title="P0" value={stats.p0 || 0} valueStyle={{ color: '#cf1322' }} /></Card>
+                                    </Col>
+                                    <Col span={6}>
+                                        <Card><Statistic title="P1" value={stats.p1 || 0} valueStyle={{ color: '#fa8c16' }} /></Card>
+                                    </Col>
+                                </Row>
+
+                                <Card
+                                    title={selectedGroup ? `📝 ${selectedGroup}` : '📝 所有测试用例'}
+                                    extra={
+                                        <Button type="primary" onClick={() => setCreateTestModalVisible(true)}>
+                                            ➕ 新建测试
+                                        </Button>
+                                    }
+                                >
+                                    <Table
+                                        columns={testColumns}
+                                        dataSource={tests}
+                                        rowKey="testId"
+                                        loading={loading}
+                                        pagination={{ pageSize: 10 }}
+                                    />
+                                </Card>
+                            </Content>
+                        </Layout>
+                    </Layout>
+
+                    {/* Create Group Modal */}
+                    <Modal
+                        title={parentGroupForCreate ? `➕ 创建子分组 (父分组: ${parentGroupForCreate.name})` : "➕ 创建测试分组"}
+                        open={createGroupModalVisible}
+                        onCancel={() => {
+                            setCreateGroupModalVisible(false);
+                            groupForm.resetFields();
+                            setParentGroupForCreate(null);
+                        }}
+                        onOk={() => groupForm.submit()}
+                        width={600}
+                    >
+                        <Form form={groupForm} layout="vertical" onFinish={handleCreateGroup}>
+                            <Form.Item name="groupId" label="分组ID" rules={[{ required: true, message: '请输入分组ID' }]}>
+                                <Input placeholder="例如：api-tests" />
+                            </Form.Item>
+                            <Form.Item name="name" label="分组名称" rules={[{ required: true, message: '请输入分组名称' }]}>
+                                <Input placeholder="例如：API Tests" />
+                            </Form.Item>
+                            <Form.Item name="parentId" label="父分组ID">
+                                <Input
+                                    placeholder="留空表示顶级分组"
+                                    disabled={!!parentGroupForCreate}
+                                />
+                            </Form.Item>
+                            <Form.Item name="description" label="描述">
+                                <TextArea rows={3} placeholder="分组描述" />
+                            </Form.Item>
+                            <Form.Item
+                                name="targetHost"
+                                label="目标服务地址"
+                                tooltip="该分组下所有测试用例将使用此地址。留空则使用全局配置。"
+                            >
+                                <Input placeholder="例如：http://127.0.0.1:9095" />
+                            </Form.Item>
+                        </Form>
+                    </Modal>
+
+                    {/* Edit Group Modal */}
+                    <Modal
+                        title="✏️ 编辑测试分组"
+                        open={editGroupModalVisible}
+                        onCancel={() => { setEditGroupModalVisible(false); editGroupForm.resetFields(); setCurrentGroup(null); }}
+                        onOk={() => editGroupForm.submit()}
+                        width={600}
+                    >
+                        <Form form={editGroupForm} layout="vertical" onFinish={handleUpdateGroup}>
+                            <Form.Item name="name" label="分组名称" rules={[{ required: true }]}>
+                                <Input />
+                            </Form.Item>
+                            <Form.Item name="description" label="描述">
+                                <TextArea rows={3} />
+                            </Form.Item>
+                            <Form.Item
+                                name="targetHost"
+                                label="目标服务地址"
+                                tooltip="该分组下所有测试用例将使用此地址。留空则使用全局配置。"
+                            >
+                                <Input placeholder="例如：http://127.0.0.1:9095" />
+                            </Form.Item>
+                        </Form>
+                    </Modal>
+
+                    {/* Create Test Modal */}
+                    <Modal
+                        title="➕ 创建测试用例"
+                        open={createTestModalVisible}
+                        onCancel={() => { setCreateTestModalVisible(false); testForm.resetFields(); }}
+                        onOk={() => testForm.submit()}
+                        width={800}
+                    >
+                        <Form form={testForm} layout="vertical" onFinish={handleCreateTest}>
+                            <Row gutter={16}>
+                                <Col span={12}>
+                                    <Form.Item name="testId" label="测试ID" rules={[{ required: true }]}>
+                                        <Input placeholder="test-001" />
+                                    </Form.Item>
+                                </Col>
+                                <Col span={12}>
+                                    <Form.Item name="groupId" label="分组" rules={[{ required: true }]}>
+                                        <Select placeholder="选择分组">
+                                            {groups.map(g => <Option key={g.groupId} value={g.groupId}>{g.name}</Option>)}
+                                        </Select>
+                                    </Form.Item>
+                                </Col>
+                            </Row>
+                            <Row gutter={16}>
+                                <Col span={12}>
+                                    <Form.Item name="name" label="名称" rules={[{ required: true }]}>
+                                        <Input />
+                                    </Form.Item>
+                                </Col>
+                                <Col span={6}>
+                                    <Form.Item name="type" label="类型" rules={[{ required: true }]}>
+                                        <Select>
+                                            <Option value="http">HTTP</Option>
+                                            <Option value="command">Command</Option>
+                                        </Select>
+                                    </Form.Item>
+                                </Col>
+                                <Col span={6}>
+                                    <Form.Item name="priority" label="优先级" initialValue="P1">
+                                        <Select>
+                                            <Option value="P0">P0</Option>
+                                            <Option value="P1">P1</Option>
+                                            <Option value="P2">P2</Option>
+                                        </Select>
+                                    </Form.Item>
+                                </Col>
+                            </Row>
+                            <Form.Item name="objective" label="目标">
+                                <TextArea rows={2} />
+                            </Form.Item>
+
+                            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.type !== curr.type}>
+                                {({ getFieldValue }) => {
+                                    const type = getFieldValue('type');
+                                    if (type === 'http') {
+                                        return (
+                                            <>
+                                                <Row gutter={16}>
+                                                    <Col span={8}>
+                                                        <Form.Item name="httpMethod" label="方法" initialValue="GET">
+                                                            <Select>
+                                                                <Option value="GET">GET</Option>
+                                                                <Option value="POST">POST</Option>
+                                                                <Option value="PUT">PUT</Option>
+                                                                <Option value="DELETE">DELETE</Option>
+                                                            </Select>
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col span={16}>
+                                                        <Form.Item name="httpPath" label="路径">
+                                                            <Input placeholder="/api/endpoint" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                </Row>
+                                                <Form.Item name="httpHeaders" label="Headers (JSON)">
+                                                    <TextArea rows={3} placeholder='{"Content-Type": "application/json"}' />
+                                                </Form.Item>
+                                                <Form.Item name="httpBody" label="Body (JSON)">
+                                                    <TextArea rows={4} placeholder='{"key": "value"}' />
+                                                </Form.Item>
+                                            </>
+                                        );
+                                    } else if (type === 'command') {
+                                        return (
+                                            <>
+                                                <Form.Item name="cmdCommand" label="命令">
+                                                    <Input placeholder="echo" />
+                                                </Form.Item>
+                                                <Form.Item name="cmdArgs" label="参数">
+                                                    <Input placeholder="hello world" />
+                                                </Form.Item>
+                                                <Form.Item name="cmdTimeout" label="超时(秒)" initialValue={60}>
+                                                    <Input type="number" />
+                                                </Form.Item>
+                                            </>
+                                        );
+                                    }
+                                    return null;
+                                }}
+                            </Form.Item>
+
+                            <Form.Item name="assertions" label="断言 (JSON)">
+                                <TextArea rows={4} placeholder='[{"type": "status_code", "expected": 200}]' />
+                            </Form.Item>
+                            <Form.Item name="tags" label="标签">
+                                <Input placeholder="api, smoke" />
+                            </Form.Item>
+
+                            <Form.Item name="setupHooks" label="Setup Hooks (JSON)">
+                                <TextArea
+                                    rows={4}
+                                    placeholder='[{"type": "http", "name": "Setup hook", "http": {"method": "GET", "path": "/health"}, "continueOnError": false}]'
+                                />
+                            </Form.Item>
+
+                            <Form.Item name="teardownHooks" label="Teardown Hooks (JSON)">
+                                <TextArea
+                                    rows={4}
+                                    placeholder='[{"type": "command", "name": "Cleanup", "command": {"cmd": "echo", "args": ["done"]}, "runOnFailure": true}]'
+                                />
+                            </Form.Item>
+                        </Form>
+                    </Modal>
+
+                    {/* Edit Test Modal */}
+                    <Modal
+                        title="✏️ 编辑测试用例"
+                        open={editTestModalVisible}
+                        onCancel={() => { setEditTestModalVisible(false); editTestForm.resetFields(); setCurrentTest(null); }}
+                        onOk={() => editTestForm.submit()}
+                        width={800}
+                    >
+                        <Form form={editTestForm} layout="vertical" onFinish={handleUpdateTest}>
+                            <Form.Item name="name" label="名称" rules={[{ required: true }]}>
+                                <Input />
+                            </Form.Item>
+                            <Row gutter={16}>
+                                <Col span={12}>
+                                    <Form.Item name="type" label="类型">
+                                        <Select disabled>
+                                            <Option value="http">HTTP</Option>
+                                            <Option value="command">Command</Option>
+                                        </Select>
+                                    </Form.Item>
+                                </Col>
+                                <Col span={12}>
+                                    <Form.Item name="priority" label="优先级">
+                                        <Select>
+                                            <Option value="P0">P0</Option>
+                                            <Option value="P1">P1</Option>
+                                            <Option value="P2">P2</Option>
+                                        </Select>
+                                    </Form.Item>
+                                </Col>
+                            </Row>
+                            <Form.Item name="objective" label="目标">
+                                <TextArea rows={2} />
+                            </Form.Item>
+
+                            <Form.Item noStyle shouldUpdate={(prev, curr) => prev.type !== curr.type}>
+                                {({ getFieldValue }) => {
+                                    const type = getFieldValue('type');
+                                    if (type === 'http') {
+                                        return (
+                                            <>
+                                                <Row gutter={16}>
+                                                    <Col span={8}>
+                                                        <Form.Item name="httpMethod" label="方法">
+                                                            <Select>
+                                                                <Option value="GET">GET</Option>
+                                                                <Option value="POST">POST</Option>
+                                                                <Option value="PUT">PUT</Option>
+                                                                <Option value="DELETE">DELETE</Option>
+                                                            </Select>
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col span={16}>
+                                                        <Form.Item name="httpPath" label="路径">
+                                                            <Input />
+                                                        </Form.Item>
+                                                    </Col>
+                                                </Row>
+                                                <Form.Item name="httpHeaders" label="Headers">
+                                                    <TextArea rows={3} />
+                                                </Form.Item>
+                                                <Form.Item name="httpBody" label="Body">
+                                                    <TextArea rows={4} />
+                                                </Form.Item>
+                                            </>
+                                        );
+                                    } else if (type === 'command') {
+                                        return (
+                                            <>
+                                                <Form.Item name="cmdCommand" label="命令">
+                                                    <Input placeholder="echo" />
+                                                </Form.Item>
+                                                <Form.Item name="cmdArgs" label="参数">
+                                                    <Input placeholder="hello world" />
+                                                </Form.Item>
+                                                <Row gutter={16}>
+                                                    <Col span={12}>
+                                                        <Form.Item name="cmdTimeout" label="超时(秒)">
+                                                            <Input type="number" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col span={12}>
+                                                        <Form.Item name="cmdCwd" label="工作目录">
+                                                            <Input placeholder="/path/to/directory" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                </Row>
+                                            </>
+                                        );
+                                    }
+                                    return null;
+                                }}
+                            </Form.Item>
+
+                            <Form.Item name="assertions" label="断言 (JSON)">
+                                <TextArea rows={4} placeholder='[{"type": "status_code", "expected": 200}]' />
+                            </Form.Item>
+                            <Form.Item name="tags" label="标签">
+                                <Input placeholder="api, smoke" />
+                            </Form.Item>
+
+                            <Form.Item name="setupHooks" label="Setup Hooks (JSON)">
+                                <TextArea
+                                    rows={4}
+                                    placeholder='[{"type": "http", "name": "Setup hook", "http": {"method": "GET", "path": "/health"}, "continueOnError": false}]'
+                                />
+                            </Form.Item>
+
+                            <Form.Item name="teardownHooks" label="Teardown Hooks (JSON)">
+                                <TextArea
+                                    rows={4}
+                                    placeholder='[{"type": "command", "name": "Cleanup", "command": {"cmd": "echo", "args": ["done"]}, "runOnFailure": true}]'
+                                />
+                            </Form.Item>
+                        </Form>
+                    </Modal>
+
+                    {/* Test History Drawer */}
+                    <Drawer
+                        title={`📊 测试历史 - ${currentTest?.name}`}
+                        placement="right"
+                        width={720}
+                        open={testHistoryDrawerVisible}
+                        onClose={() => { setTestHistoryDrawerVisible(false); setCurrentTest(null); setTestResults([]); }}
+                    >
+                        {testResults.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: 40 }}>暂无历史记录</div>
+                        ) : (
+                            <Space direction="vertical" style={{ width: '100%' }} size="large">
+                                {testResults.map((result, index) => (
+                                    <Card
+                                        key={result.id}
+                                        size="small"
+                                        title={
+                                            <Space>
+                                                <span>执行 #{testResults.length - index}</span>
+                                                <Tag color={
+                                                    result.status === 'passed' ? 'success' :
+                                                    result.status === 'failed' ? 'error' : 'warning'
+                                                }>
+                                                    {result.status.toUpperCase()}
+                                                </Tag>
+                                            </Space>
+                                        }
+                                    >
+                                        <Descriptions size="small" column={2}>
+                                            <Descriptions.Item label="时间">
+                                                {new Date(result.startTime).toLocaleString('zh-CN')}
+                                            </Descriptions.Item>
+                                            <Descriptions.Item label="耗时">
+                                                {result.duration}ms
+                                            </Descriptions.Item>
+                                        </Descriptions>
+                                        {result.error && (
+                                            <div style={{ marginTop: 12 }}>
+                                                <strong>错误:</strong>
+                                                <div className="json-viewer">{result.error}</div>
+                                            </div>
+                                        )}
+                                        {result.failures && result.failures.length > 0 && (
+                                            <div style={{ marginTop: 12 }}>
+                                                <strong>失败:</strong>
+                                                <div className="json-viewer">
+                                                    {result.failures.map((f, i) => (
+                                                        <div key={i}>• {typeof f === 'string' ? f : JSON.stringify(f)}</div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </Card>
+                                ))}
+                            </Space>
+                        )}
+                    </Drawer>
+                </Layout>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
